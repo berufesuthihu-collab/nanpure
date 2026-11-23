@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ナンプレ解けるくん（最大40連・正確性重視）</title>
+  <style>
+    :root {
+      --cell-size: 30px;
+      --font-size: 15px;
+      --bg: #f4f6f9;
+      --panel: #ffffff;
+      --border: #cbd5e1;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --secondary: #475569;
+      --danger: #dc2626;
+      --given-bg: #e2e8f0;
+      --solved-bg: #eff6ff;
+      --solved-text: #1e40af;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: #0f172a;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    h1 {
+      font-size: 16px;
+      margin: 0 12px 0 0;
+    }
+
+    .group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-right: 10px;
+      border-right: 1px solid var(--border);
+    }
+
+    .group:last-child {
+      border-right: none;
+    }
+
+    button, select {
+      height: 32px;
+      padding: 0 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #fff;
+      color: #0f172a;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) {
+      background: #f1f5f9;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    button.danger {
+      color: var(--danger);
+      border-color: #fecaca;
+    }
+
+    .badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #e2e8f0;
+    }
+
+    #status {
+      font-size: 13px;
+      font-weight: 600;
+      margin-left: auto;
+    }
+
+    .main-area {
+      flex: 1;
+      overflow: auto;
+      padding: 20px;
+      position: relative;
+    }
+
+    #canvas {
+      position: relative;
+      margin: 0 auto;
+    }
+
+    .board-outline {
+      position: absolute;
+      border: 2px solid rgba(37, 99, 235, 0.45);
+      border-radius: 4px;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    .board-outline.active {
+      border: 2.5px solid var(--primary);
+      background: rgba(37, 99, 235, 0.05);
+      z-index: 3;
+    }
+
+    .board-tag {
+      position: absolute;
+      top: -18px;
+      left: 0;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--primary);
+      color: #fff;
+      padding: 1px 6px;
+      border-radius: 3px;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+
+    .board-outline:not(.active) .board-tag {
+      background: #64748b;
+    }
+
+    input.cell-input {
+      position: absolute;
+      width: var(--cell-size);
+      height: var(--cell-size);
+      text-align: center;
+      font-size: var(--font-size);
+      font-weight: 700;
+      border: 1px solid #94a3b8;
+      background: #fff;
+      color: #0f172a;
+      padding: 0;
+      outline: none;
+      z-index: 4;
+    }
+
+    input.cell-input:focus {
+      background: #fef9c3;
+      border-color: #d97706;
+      z-index: 6;
+    }
+
+    input.cell-input.given {
+      background: var(--given-bg);
+      color: #0f172a;
+    }
+
+    input.cell-input.solved {
+      background: var(--solved-bg);
+      color: var(--solved-text);
+    }
+
+    .b-top { border-top: 2px solid #1e293b !important; }
+    .b-left { border-left: 2px solid #1e293b !important; }
+    .b-right { border-right: 2px solid #1e293b !important; }
+    .b-bottom { border-bottom: 2px solid #1e293b !important; }
+
+    .help {
+      font-size: 12px;
+      color: #475569;
+      padding: 0 16px 10px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>マルチナンプレ ソルバー</h1>
+    <span class="badge" id="board-count-badge">盤面: 0 / 40</span>
+
+    <div class="group">
+      <label for="preset-select" style="font-size:12px;">配置:</label>
+      <select id="preset-select">
+        <option value="cross5">5連（中央＋四隅・画像形）</option>
+        <option value="pair2">2連（角の3x3が重なる形）</option>
+        <option value="chain4">4連（斜め・角接続）</option>
+        <option value="single1">1連（通常ナンプレ）</option>
+      </select>
+      <button id="apply-preset-btn" type="button">配置を適用</button>
+    </div>
+
+    <div class="group">
+      <button id="add-board-btn" type="button">+ 盤面を追加</button>
+      <button id="add-at-cell-btn" type="button">+ 選択マスに重なるよう追加</button>
+      <button id="remove-board-btn" type="button" class="danger">選択盤面を削除</button>
+    </div>
+
+    <div class="group" title="角の3x3が重なるよう6マス単位で移動">
+      <span style="font-size:12px;">選択盤面移動:</span>
+      <button id="move-up-btn" type="button">↑</button>
+      <button id="move-down-btn" type="button">↓</button>
+      <button id="move-left-btn" type="button">←</button>
+      <button id="move-right-btn" type="button">→</button>
+    </div>
+
+    <div class="group">
+      <label for="zoom-select" style="font-size:12px;">表示:</label>
+      <select id="zoom-select">
+        <option value="30">100%</option>
+        <option value="22">75%</option>
+        <option value="16">55%（広域用）</option>
+      </select>
+    </div>
+
+    <div class="group">
+      <button id="solve-btn" type="button" class="primary">解く</button>
+      <button id="check-unique-btn" type="button">解の一意性を確認</button>
+      <button id="clear-solved-btn" type="button">解答を消去</button>
+      <button id="clear-all-btn" type="button" class="danger">全数字クリア</button>
+    </div>
+
+    <div id="status">準備完了</div>
+  </header>
+
+  <div class="help">
+    操作ヒント：最大40連まで対応しています。テキストボックスを選択して「+ 選択マスに重なるよう追加」を押すとそのマスを含む位置に盤面を追加できます。「解の一意性を確認」で解が1つだけか複数あるかも調べられます。
+  </div>
+
+  <div class="main-area">
+    <div id="canvas"></div>
+  </div>
+
+  <script>
+    const MAX_BOARDS = 40;
+    const STEP = 6;
+    let cellSize = 30;
+
+    let boards = [];
+    let selectedBoardIndex = 0;
+    let focusedCell = null;
+    let givenValues = new Map();
+    let solvedValues = new Map();
+
+    const $canvas = document.getElementById("canvas");
+    const $badge = document.getElementById("board-count-badge");
+    const $status = document.getElementById("status");
+    const $presetSelect = document.getElementById("preset-select");
+    const $zoomSelect = document.getElementById("zoom-select");
+
+    function keyOf(r, c) {
+      return `${r},${c}`;
+    }
+
+    function getPresets(name) {
+      if (name === "single1") {
+        return [{ r: 0, c: 0 }];
+      }
+      if (name === "pair2") {
+        return [
+          { r: 0, c: 0 },
+          { r: 6, c: 6 },
+        ];
+      }
+      if (name === "chain4") {
+        return [
+          { r: 0, c: 0 },
+          { r: 6, c: 6 },
+          { r: 12, c: 12 },
+          { r: 18, c: 18 },
+        ];
+      }
+      return [
+        { r: 0, c: 0 },
+        { r: 0, c: 12 },
+        { r: 6, c: 6 },
+        { r: 12, c: 0 },
+        { r: 12, c: 12 },
+      ];
+    }
+
+    function applyPreset(name) {
+      const coords = getPresets(name);
+      boards = coords.map((pt, idx) => ({
+        id: idx + 1,
+        r: pt.r,
+        c: pt.c,
+      }));
+      selectedBoardIndex = 0;
+      focusedCell = { r: boards[0].r, c: boards[0].c };
+      solvedValues.clear();
+      normalizeOffsets();
+      render();
+      setStatus(`プリセット「${$presetSelect.options[$presetSelect.selectedIndex].text}」を適用しました`);
+    }
+
+    function normalizeOffsets() {
+      if (boards.length === 0) return;
+      let minR = Infinity, minC = Infinity;
+      for (const b of boards) {
+        if (b.r < minR) minR = b.r;
+        if (b.c < minC) minC = b.c;
+      }
+      const shiftR = minR < 0 ? -minR : 0;
+      const shiftC = minC < 0 ? -minC : 0;
+      if (shiftR !== 0 || shiftC !== 0) {
+        for (const b of boards) {
+          b.r += shiftR;
+          b.c += shiftC;
+        }
+        if (focusedCell) {
+          focusedCell.r += shiftR;
+          focusedCell.c += shiftC;
+        }
+        const nextGiven = new Map();
+        for (const [k, v] of givenValues.entries()) {
+          const [r, c] = k.split(",").map(Number);
+          nextGiven.set(keyOf(r + shiftR, c + shiftC), v);
+        }
+        givenValues = nextGiven;
+
+        const nextSolved = new Map();
+        for (const [k, v] of solvedValues.entries()) {
+          const [r, c] = k.split(",").map(Number);
+          nextSolved.set(keyOf(r + shiftR, c + shiftC), v);
+        }
+        solvedValues = nextSolved;
+      }
+    }
+
+    function addBoard() {
+      if (boards.length >= MAX_BOARDS) {
+        setStatus(`最大${MAX_BOARDS}連までです`, true);
+        return;
+      }
+      const base = boards[selectedBoardIndex] || boards[boards.length - 1] || { r: 0, c: 0 };
+      const candidates = [
+        { r: base.r + STEP, c: base.c + STEP },
+        { r: base.r, c: base.c + STEP },
+        { r: base.r + STEP, c: base.c },
+        { r: base.r - STEP, c: base.c + STEP },
+        { r: base.r + STEP, c: base.c - STEP },
+        { r: 0, c: boards.length * STEP },
+      ];
+
+      const existingSet = new Set(boards.map(b => `${b.r},${b.c}`));
+      let chosen = candidates.find(pt => !existingSet.has(`${pt.r},${pt.c}`));
+      if (!chosen) {
+        chosen = { r: base.r + STEP, c: base.c + STEP };
+      }
+
+      const nextId = boards.reduce((m, b) => Math.max(m, b.id), 0) + 1;
+      boards.push({ id: nextId, r: chosen.r, c: chosen.c });
+      selectedBoardIndex = boards.length - 1;
+      solvedValues.clear();
+      normalizeOffsets();
+      render();
+      setStatus(`盤面 #${nextId} を追加しました（全${boards.length}連）`);
+    }
+
+    function addBoardAtFocusedCell() {
+      if (boards.length >= MAX_BOARDS) {
+        setStatus(`最大${MAX_BOARDS}連までです`, true);
+        return;
+      }
+      if (!focusedCell) {
+        setStatus("先に盤面内のテキストボックスをクリックして選択してください", true);
+        return;
+      }
+
+      const { r: fr, c: fc } = focusedCell;
+      const existingSet = new Set(boards.map(b => `${b.r},${b.c}`));
+
+      const candidateCoords = [];
+      for (let dr = 0; dr < 9; dr++) {
+        for (let dc = 0; dc < 9; dc++) {
+          const br = fr - dr;
+          const bc = fc - dc;
+          let overlapCount = 0;
+          for (const b of boards) {
+            const rOverlap = Math.max(0, Math.min(br + 9, b.r + 9) - Math.max(br, b.r));
+            const cOverlap = Math.max(0, Math.min(bc + 9, b.c + 9) - Math.max(bc, b.c));
+            overlapCount += rOverlap * cOverlap;
+          }
+          const cornerBonus = overlapCount === 9 ? 100 : overlapCount > 0 ? 50 - Math.abs(overlapCount - 9) : 0;
+          candidateCoords.push({ r: br, c: bc, score: cornerBonus });
+        }
+      }
+
+      candidateCoords.sort((a, b) => b.score - a.score);
+
+      let chosen = candidateCoords.find(pt => !existingSet.has(`${pt.r},${pt.c}`));
+      if (!chosen) {
+        setStatus(`座標 (${fr}, ${fc}) を含む新しい配置パターンが見つかりません`, true);
+        return;
+      }
+
+      const nextId = boards.reduce((m, b) => Math.max(m, b.id), 0) + 1;
+      boards.push({ id: nextId, r: chosen.r, c: chosen.c });
+      selectedBoardIndex = boards.length - 1;
+      solvedValues.clear();
+      normalizeOffsets();
+      render(focusedCell);
+      setStatus(`マス (${fr}, ${fc}) に重なるよう盤面 #${nextId} を追加しました（全${boards.length}連）`);
+    }
+
+    function removeSelectedBoard() {
+      if (boards.length <= 1) {
+        setStatus("最低1つの盤面が必要です", true);
+        return;
+      }
+      const removed = boards.splice(selectedBoardIndex, 1)[0];
+      if (selectedBoardIndex >= boards.length) {
+        selectedBoardIndex = boards.length - 1;
+      }
+      solvedValues.clear();
+      render();
+      setStatus(`盤面 #${removed.id} を削除しました`);
+    }
+
+    function moveSelectedBoard(dr, dc) {
+      if (boards.length === 0) return;
+      const b = boards[selectedBoardIndex];
+      b.r += dr * STEP;
+      b.c += dc * STEP;
+      solvedValues.clear();
+      normalizeOffsets();
+      render();
+    }
+
+    function collectCellsInfo() {
+      const cellMap = new Map();
+
+      boards.forEach((b) => {
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            const gr = b.r + r;
+            const gc = b.c + c;
+            const k = keyOf(gr, gc);
+            if (!cellMap.has(k)) {
+              cellMap.set(k, {
+                r: gr,
+                c: gc,
+                top: false,
+                right: false,
+                bottom: false,
+                left: false,
+              });
+            }
+            const info = cellMap.get(k);
+            if (r % 3 === 0) info.top = true;
+            if (r % 3 === 2) info.bottom = true;
+            if (c % 3 === 0) info.left = true;
+            if (c % 3 === 2) info.right = true;
+          }
+        }
+      });
+
+      return cellMap;
+    }
+
+    function render(restoreFocus = null) {
+      document.documentElement.style.setProperty("--cell-size", `${cellSize}px`);
+      document.documentElement.style.setProperty("--font-size", `${Math.max(10, Math.round(cellSize * 0.5))}px`);
+
+      $badge.textContent = `盤面: ${boards.length} / ${MAX_BOARDS}`;
+      document.getElementById("add-board-btn").disabled = boards.length >= MAX_BOARDS;
+      document.getElementById("add-at-cell-btn").disabled = boards.length >= MAX_BOARDS;
+      document.getElementById("remove-board-btn").disabled = boards.length <= 1;
+
+      const cellMap = collectCellsInfo();
+      let maxR = 0, maxC = 0;
+      for (const info of cellMap.values()) {
+        if (info.r > maxR) maxR = info.r;
+        if (info.c > maxC) maxC = info.c;
+      }
+
+      const padTop = 26;
+      const padLeft = 10;
+      $canvas.style.width = `${(maxC + 1) * cellSize + padLeft + 20}px`;
+      $canvas.style.height = `${(maxR + 1) * cellSize + padTop + 20}px`;
+      $canvas.innerHTML = "";
+
+      boards.forEach((b, idx) => {
+        const outline = document.createElement("div");
+        outline.className = "board-outline" + (idx === selectedBoardIndex ? " active" : "");
+        outline.style.left = `${padLeft + b.c * cellSize}px`;
+        outline.style.top = `${padTop + b.r * cellSize}px`;
+        outline.style.width = `${9 * cellSize}px`;
+        outline.style.height = `${9 * cellSize}px`;
+
+        const tag = document.createElement("div");
+        tag.className = "board-tag";
+        tag.textContent = `#${b.id}`;
+        tag.title = "クリックしてこの盤面を選択";
+        tag.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectedBoardIndex = idx;
+          render(focusedCell);
+        });
+
+        outline.appendChild(tag);
+        $canvas.appendChild(outline);
+      });
+
+      for (const [k, info] of cellMap.entries()) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.inputMode = "numeric";
+        input.maxLength = 1;
+        input.dataset.r = info.r;
+        input.dataset.c = info.c;
+        input.className = "cell-input";
+        if (info.top) input.classList.add("b-top");
+        if (info.right) input.classList.add("b-right");
+        if (info.bottom) input.classList.add("b-bottom");
+        if (info.left) input.classList.add("b-left");
+
+        input.style.left = `${padLeft + info.c * cellSize}px`;
+        input.style.top = `${padTop + info.r * cellSize}px`;
+
+        if (givenValues.has(k)) {
+          input.value = String(givenValues.get(k));
+          input.classList.add("given");
+        } else if (solvedValues.has(k)) {
+          input.value = String(solvedValues.get(k));
+          input.classList.add("solved");
+        }
+
+        input.addEventListener("focus", () => {
+          focusedCell = { r: info.r, c: info.c };
+          const containingIdx = boards.findIndex(
+            b => info.r >= b.r && info.r < b.r + 9 && info.c >= b.c && info.c < b.c + 9
+          );
+          if (containingIdx !== -1 && containingIdx !== selectedBoardIndex) {
+            selectedBoardIndex = containingIdx;
+            $canvas.querySelectorAll(".board-outline").forEach((el, i) => {
+              el.classList.toggle("active", i === selectedBoardIndex);
+            });
+          }
+        });
+
+        input.addEventListener("input", (e) => {
+          const raw = e.target.value.replace(/[１-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
+          const match = raw.match(/[1-9]/);
+          solvedValues.clear();
+          clearSolvedClasses();
+
+          if (match) {
+            const num = Number(match[0]);
+            e.target.value = String(num);
+            givenValues.set(k, num);
+            e.target.classList.add("given");
+            e.target.classList.remove("solved");
+          } else {
+            e.target.value = "";
+            givenValues.delete(k);
+            e.target.classList.remove("given", "solved");
+          }
+        });
+
+        input.addEventListener("keydown", (e) => {
+          const r = Number(e.target.dataset.r);
+          const c = Number(e.target.dataset.c);
+          let nr = r, nc = c;
+          if (e.key === "ArrowUp") nr--;
+          else if (e.key === "ArrowDown") nr++;
+          else if (e.key === "ArrowLeft") nc--;
+          else if (e.key === "ArrowRight") nc++;
+          else return;
+
+          const target = $canvas.querySelector(`input.cell-input[data-r="${nr}"][data-c="${nc}"]`);
+          if (target) {
+            e.preventDefault();
+            target.focus();
+            target.select();
+          }
+        });
+
+        $canvas.appendChild(input);
+      }
+
+      if (restoreFocus) {
+        const target = $canvas.querySelector(
+          `input.cell-input[data-r="${restoreFocus.r}"][data-c="${restoreFocus.c}"]`
+        );
+        if (target) {
+          target.focus();
+        }
+      }
+    }
+
+    function clearSolvedClasses() {
+      $canvas.querySelectorAll("input.cell-input.solved").forEach(el => {
+        el.classList.remove("solved");
+      });
+    }
+
+    function setStatus(msg, isError = false) {
+      $status.textContent = msg;
+      $status.style.color = isError ? "#dc2626" : "#0f172a";
+    }
+
+    // --- 正確性重視ソルバー（厳密な制約チェック + MRVバックトラッキング + 解数カウント対応） ---
+    function solveMultiSudoku(cellMap, initialGiven, maxSolutions = 1) {
+      const cellKeys = Array.from(cellMap.keys());
+      const indexOfKey = new Map();
+      cellKeys.forEach((k, idx) => indexOfKey.set(k, idx));
+
+      const N = cellKeys.length;
+      const peers = Array.from({ length: N }, () => new Set());
+      const units = [];
+
+      // 重複を除いてすべての行・列・3x3ブロックを収集
+      const seenUnitSignatures = new Set();
+      function addUniqueUnit(indices) {
+        const sortedSig = indices.slice().sort((a, b) => a - b).join(",");
+        if (!seenUnitSignatures.has(sortedSig)) {
+          seenUnitSignatures.add(sortedSig);
+          units.push(indices);
+        }
+      }
+
+      for (const b of boards) {
+        for (let r = 0; r < 9; r++) {
+          const rowUnit = [];
+          for (let c = 0; c < 9; c++) {
+            rowUnit.push(indexOfKey.get(keyOf(b.r + r, b.c + c)));
+          }
+          addUniqueUnit(rowUnit);
+        }
+        for (let c = 0; c < 9; c++) {
+          const colUnit = [];
+          for (let r = 0; r < 9; r++) {
+            colUnit.push(indexOfKey.get(keyOf(b.r + r, b.c + c)));
+          }
+          addUniqueUnit(colUnit);
+        }
+        for (let br = 0; br < 9; br += 3) {
+          for (let bc = 0; bc < 9; bc += 3) {
+            const boxUnit = [];
+            for (let dr = 0; dr < 3; dr++) {
+              for (let dc = 0; dc < 3; dc++) {
+                boxUnit.push(indexOfKey.get(keyOf(b.r + br + dr, b.c + bc + dc)));
+              }
+            }
+            addUniqueUnit(boxUnit);
+          }
+        }
+      }
+
+      for (const unit of units) {
+        for (let i = 0; i < unit.length; i++) {
+          for (let j = 0; j < unit.length; j++) {
+            if (i !== j) peers[unit[i]].add(unit[j]);
+          }
+        }
+      }
+
+      const peerArrays = peers.map(s => Array.from(s));
+      const grid = new Array(N).fill(0);
+
+      // 初期配置の検証
+      for (const [k, val] of initialGiven.entries()) {
+        if (!indexOfKey.has(k)) continue;
+        const idx = indexOfKey.get(k);
+        if (val < 1 || val > 9 || !Number.isInteger(val)) {
+          return { ok: false, reason: `座標 (${k}) に不正な値があります` };
+        }
+        for (const p of peerArrays[idx]) {
+          if (grid[p] === val) {
+            return { ok: false, reason: `座標 (${k}) の数字 ${val} が同列・同行・同ブロック内で重複しています` };
+          }
+        }
+        grid[idx] = val;
+      }
+
+      function getValidNumbers(idx) {
+        const forbidden = new Set();
+        for (const p of peerArrays[idx]) {
+          const v = grid[p];
+          if (v !== 0) forbidden.add(v);
+        }
+        const candidates = [];
+        for (let num = 1; num <= 9; num++) {
+          if (!forbidden.has(num)) candidates.push(num);
+        }
+        return candidates;
+      }
+
+      // 現在の盤面状態に矛盾がないか（空きマスで候補0のマスがないか、ユニット内で数字が入る余地が消えていないか）を確認
+      function isStateConsistent() {
+        for (let i = 0; i < N; i++) {
+          if (grid[i] === 0 && getValidNumbers(i).length === 0) {
+            return false;
+          }
+        }
+        for (const unit of units) {
+          const present = new Set();
+          const emptyIndices = [];
+          for (const idx of unit) {
+            if (grid[idx] !== 0) {
+              if (present.has(grid[idx])) return false;
+              present.add(grid[idx]);
+            } else {
+              emptyIndices.push(idx);
+            }
+          }
+          for (let num = 1; num <= 9; num++) {
+            if (!present.has(num)) {
+              const canPlaceSomewhere = emptyIndices.some(idx => getValidNumbers(idx).includes(num));
+              if (!canPlaceSomewhere) return false;
+            }
+          }
+        }
+        return true;
+      }
+
+      if (!isStateConsistent()) {
+        return { ok: false, reason: "初期配置に矛盾があり、解が存在しません" };
+      }
+
+      const foundSolutions = [];
+
+      function search() {
+        if (foundSolutions.length >= maxSolutions) return;
+
+        if (!isStateConsistent()) return;
+
+        // 候補数が最小の未確定マス（MRV）を選択
+        let bestIdx = -1;
+        let bestCandidates = null;
+
+        for (let i = 0; i < N; i++) {
+          if (grid[i] === 0) {
+            const cands = getValidNumbers(i);
+            if (cands.length === 0) return;
+            if (bestCandidates === null || cands.length < bestCandidates.length) {
+              bestCandidates = cands;
+              bestIdx = i;
+              if (cands.length === 1) break;
+            }
+          }
+        }
+
+        // すべてのマスが確定した場合
+        if (bestIdx === -1) {
+          foundSolutions.push(grid.slice());
+          return;
+        }
+
+        for (const num of bestCandidates) {
+          grid[bestIdx] = num;
+          search();
+          grid[bestIdx] = 0;
+          if (foundSolutions.length >= maxSolutions) return;
+        }
+      }
+
+      const t0 = performance.now();
+      search();
+      const elapsed = (performance.now() - t0).toFixed(1);
+
+      if (foundSolutions.length === 0) {
+        return { ok: false, reason: `解が見つかりませんでした（${elapsed} ms）` };
+      }
+
+      const firstSol = foundSolutions[0];
+      const result = new Map();
+      for (let i = 0; i < N; i++) {
+        const k = cellKeys[i];
+        if (!initialGiven.has(k)) {
+          result.set(k, firstSol[i]);
+        }
+      }
+
+      return {
+        ok: true,
+        result,
+        solutionCount: foundSolutions.length,
+        elapsed,
+      };
+    }
+
+    document.getElementById("apply-preset-btn").addEventListener("click", () => {
+      applyPreset($presetSelect.value);
+    });
+
+    document.getElementById("add-board-btn").addEventListener("click", addBoard);
+    document.getElementById("add-at-cell-btn").addEventListener("click", addBoardAtFocusedCell);
+    document.getElementById("remove-board-btn").addEventListener("click", removeSelectedBoard);
+
+    document.getElementById("move-up-btn").addEventListener("click", () => moveSelectedBoard(-1, 0));
+    document.getElementById("move-down-btn").addEventListener("click", () => moveSelectedBoard(1, 0));
+    document.getElementById("move-left-btn").addEventListener("click", () => moveSelectedBoard(0, -1));
+    document.getElementById("move-right-btn").addEventListener("click", () => moveSelectedBoard(0, 1));
+
+    $zoomSelect.addEventListener("change", () => {
+      cellSize = Number($zoomSelect.value);
+      render(focusedCell);
+    });
+
+    document.getElementById("solve-btn").addEventListener("click", () => {
+      const cellMap = collectCellsInfo();
+      const res = solveMultiSudoku(cellMap, givenValues, 1);
+      if (res.ok) {
+        solvedValues = res.result;
+        render(focusedCell);
+        setStatus(`解を表示しました（${boards.length}連 / ${res.elapsed} ms）`);
+      } else {
+        setStatus(res.reason, true);
+      }
+    });
+
+    document.getElementById("check-unique-btn").addEventListener("click", () => {
+      const cellMap = collectCellsInfo();
+      const res = solveMultiSudoku(cellMap, givenValues, 2);
+      if (!res.ok) {
+        setStatus(res.reason, true);
+        return;
+      }
+      solvedValues = res.result;
+      render(focusedCell);
+      if (res.solutionCount === 1) {
+        setStatus(`一意解（解は1通りのみ）を確認しました（${boards.length}連 / ${res.elapsed} ms）`);
+      } else {
+        setStatus(`注意：複数の解が存在します（2個以上を確認 / ${res.elapsed} ms）`, true);
+      }
+    });
+
+    document.getElementById("clear-solved-btn").addEventListener("click", () => {
+      solvedValues.clear();
+      render(focusedCell);
+      setStatus("解答を消去しました");
+    });
+
+    document.getElementById("clear-all-btn").addEventListener("click", () => {
+      givenValues.clear();
+      solvedValues.clear();
+      render(focusedCell);
+      setStatus("全数字をクリアしました");
+    });
+
+    applyPreset("cross5");
+  </script>
+</body>
+</html>
