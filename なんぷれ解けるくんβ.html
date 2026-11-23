@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ナンプレ解けるくん（最大40連・正確性重視）</title>
+  <title>マルチナンプレ ソルバー（最大40連・正確性重視）</title>
   <style>
     :root {
       --cell-size: 30px;
@@ -13,7 +13,6 @@
       --border: #cbd5e1;
       --primary: #2563eb;
       --primary-hover: #1d4ed8;
-      --secondary: #475569;
       --danger: #dc2626;
       --given-bg: #e2e8f0;
       --solved-bg: #eff6ff;
@@ -235,11 +234,19 @@
         <option value="22">75%</option>
         <option value="16">55%（広域用）</option>
       </select>
+      <label for="timeout-select" style="font-size:12px;">制限時間:</label>
+      <select id="timeout-select">
+        <option value="10000" selected>10秒</option>
+        <option value="30000">30秒</option>
+        <option value="60000">60秒</option>
+        <option value="0">無制限</option>
+      </select>
     </div>
 
     <div class="group">
       <button id="solve-btn" type="button" class="primary">解く</button>
       <button id="check-unique-btn" type="button">解の一意性を確認</button>
+      <button id="cancel-solve-btn" type="button" class="danger" disabled>中止</button>
       <button id="clear-solved-btn" type="button">解答を消去</button>
       <button id="clear-all-btn" type="button" class="danger">全数字クリア</button>
     </div>
@@ -248,7 +255,7 @@
   </header>
 
   <div class="help">
-    操作ヒント：最大40連まで対応しています。テキストボックスを選択して「+ 選択マスに重なるよう追加」を押すとそのマスを含む位置に盤面を追加できます。「解の一意性を確認」で解が1つだけか複数あるかも調べられます。
+    操作ヒント：最大40連まで対応しています。制限時間内に終わらなかった場合は「時間切れ（解なしとは確定していません）」と表示され、本当に解が存在しない場合と区別できます。
   </div>
 
   <div class="main-area">
@@ -266,11 +273,16 @@
     let givenValues = new Map();
     let solvedValues = new Map();
 
+    // 探索制御用フラグ
+    let isSolving = false;
+    let cancelRequested = false;
+
     const $canvas = document.getElementById("canvas");
     const $badge = document.getElementById("board-count-badge");
     const $status = document.getElementById("status");
     const $presetSelect = document.getElementById("preset-select");
     const $zoomSelect = document.getElementById("zoom-select");
+    const $timeoutSelect = document.getElementById("timeout-select");
 
     function keyOf(r, c) {
       return `${r},${c}`;
@@ -483,14 +495,28 @@
       return cellMap;
     }
 
+    function updateControlsState() {
+      document.getElementById("add-board-btn").disabled = isSolving || boards.length >= MAX_BOARDS;
+      document.getElementById("add-at-cell-btn").disabled = isSolving || boards.length >= MAX_BOARDS;
+      document.getElementById("remove-board-btn").disabled = isSolving || boards.length <= 1;
+      document.getElementById("apply-preset-btn").disabled = isSolving;
+      document.getElementById("move-up-btn").disabled = isSolving;
+      document.getElementById("move-down-btn").disabled = isSolving;
+      document.getElementById("move-left-btn").disabled = isSolving;
+      document.getElementById("move-right-btn").disabled = isSolving;
+      document.getElementById("solve-btn").disabled = isSolving;
+      document.getElementById("check-unique-btn").disabled = isSolving;
+      document.getElementById("cancel-solve-btn").disabled = !isSolving;
+      document.getElementById("clear-solved-btn").disabled = isSolving;
+      document.getElementById("clear-all-btn").disabled = isSolving;
+    }
+
     function render(restoreFocus = null) {
       document.documentElement.style.setProperty("--cell-size", `${cellSize}px`);
       document.documentElement.style.setProperty("--font-size", `${Math.max(10, Math.round(cellSize * 0.5))}px`);
 
       $badge.textContent = `盤面: ${boards.length} / ${MAX_BOARDS}`;
-      document.getElementById("add-board-btn").disabled = boards.length >= MAX_BOARDS;
-      document.getElementById("add-at-cell-btn").disabled = boards.length >= MAX_BOARDS;
-      document.getElementById("remove-board-btn").disabled = boards.length <= 1;
+      updateControlsState();
 
       const cellMap = collectCellsInfo();
       let maxR = 0, maxC = 0;
@@ -519,6 +545,7 @@
         tag.title = "クリックしてこの盤面を選択";
         tag.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (isSolving) return;
           selectedBoardIndex = idx;
           render(focusedCell);
         });
@@ -532,6 +559,7 @@
         input.type = "text";
         input.inputMode = "numeric";
         input.maxLength = 1;
+        input.disabled = isSolving;
         input.dataset.r = info.r;
         input.dataset.c = info.c;
         input.className = "cell-input";
@@ -604,7 +632,7 @@
         $canvas.appendChild(input);
       }
 
-      if (restoreFocus) {
+      if (restoreFocus && !isSolving) {
         const target = $canvas.querySelector(
           `input.cell-input[data-r="${restoreFocus.r}"][data-c="${restoreFocus.c}"]`
         );
@@ -625,8 +653,12 @@
       $status.style.color = isError ? "#dc2626" : "#0f172a";
     }
 
-    // --- 正確性重視ソルバー（厳密な制約チェック + MRVバックトラッキング + 解数カウント対応） ---
-    function solveMultiSudoku(cellMap, initialGiven, maxSolutions = 1) {
+    function yieldToBrowser() {
+      return new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    // --- 正確性重視ソルバー（制限時間・中断対応・解なしと時間切れを明確に区別） ---
+    async function solveMultiSudoku(cellMap, initialGiven, maxSolutions = 1, timeoutMs = 10000) {
       const cellKeys = Array.from(cellMap.keys());
       const indexOfKey = new Map();
       cellKeys.forEach((k, idx) => indexOfKey.set(k, idx));
@@ -635,7 +667,6 @@
       const peers = Array.from({ length: N }, () => new Set());
       const units = [];
 
-      // 重複を除いてすべての行・列・3x3ブロックを収集
       const seenUnitSignatures = new Set();
       function addUniqueUnit(indices) {
         const sortedSig = indices.slice().sort((a, b) => a - b).join(",");
@@ -684,16 +715,15 @@
       const peerArrays = peers.map(s => Array.from(s));
       const grid = new Array(N).fill(0);
 
-      // 初期配置の検証
       for (const [k, val] of initialGiven.entries()) {
         if (!indexOfKey.has(k)) continue;
         const idx = indexOfKey.get(k);
         if (val < 1 || val > 9 || !Number.isInteger(val)) {
-          return { ok: false, reason: `座標 (${k}) に不正な値があります` };
+          return { status: "invalid", reason: `座標 (${k}) に不正な値があります` };
         }
         for (const p of peerArrays[idx]) {
           if (grid[p] === val) {
-            return { ok: false, reason: `座標 (${k}) の数字 ${val} が同列・同行・同ブロック内で重複しています` };
+            return { status: "invalid", reason: `座標 (${k}) の数字 ${val} が同列・同行・同ブロック内で重複しています` };
           }
         }
         grid[idx] = val;
@@ -712,7 +742,6 @@
         return candidates;
       }
 
-      // 現在の盤面状態に矛盾がないか（空きマスで候補0のマスがないか、ユニット内で数字が入る余地が消えていないか）を確認
       function isStateConsistent() {
         for (let i = 0; i < N; i++) {
           if (grid[i] === 0 && getValidNumbers(i).length === 0) {
@@ -741,17 +770,43 @@
       }
 
       if (!isStateConsistent()) {
-        return { ok: false, reason: "初期配置に矛盾があり、解が存在しません" };
+        return { status: "no_solution", reason: "初期配置に矛盾があり、解が存在しません" };
       }
 
       const foundSolutions = [];
+      const t0 = performance.now();
+      let steps = 0;
+      let timedOut = false;
+      let cancelled = false;
 
-      function search() {
-        if (foundSolutions.length >= maxSolutions) return;
+      async function search() {
+        if (foundSolutions.length >= maxSolutions || timedOut || cancelled) return;
+
+        steps++;
+        if (steps % 4000 === 0) {
+          if (cancelRequested) {
+            cancelled = true;
+            return;
+          }
+          if (timeoutMs > 0 && (performance.now() - t0) >= timeoutMs) {
+            timedOut = true;
+            return;
+          }
+          const sec = ((performance.now() - t0) / 1000).toFixed(1);
+          setStatus(`探索中...（${sec}秒経過 / ${steps.toLocaleString()}ステップ）`);
+          await yieldToBrowser();
+          if (cancelRequested) {
+            cancelled = true;
+            return;
+          }
+          if (timeoutMs > 0 && (performance.now() - t0) >= timeoutMs) {
+            timedOut = true;
+            return;
+          }
+        }
 
         if (!isStateConsistent()) return;
 
-        // 候補数が最小の未確定マス（MRV）を選択
         let bestIdx = -1;
         let bestCandidates = null;
 
@@ -767,7 +822,6 @@
           }
         }
 
-        // すべてのマスが確定した場合
         if (bestIdx === -1) {
           foundSolutions.push(grid.slice());
           return;
@@ -775,18 +829,38 @@
 
         for (const num of bestCandidates) {
           grid[bestIdx] = num;
-          search();
+          await search();
           grid[bestIdx] = 0;
-          if (foundSolutions.length >= maxSolutions) return;
+          if (foundSolutions.length >= maxSolutions || timedOut || cancelled) return;
         }
       }
 
-      const t0 = performance.now();
-      search();
-      const elapsed = (performance.now() - t0).toFixed(1);
+      await search();
+      const elapsedSec = ((performance.now() - t0) / 1000).toFixed(2);
+
+      if (cancelled) {
+        return {
+          status: "cancelled",
+          reason: `探索を中止しました（${elapsedSec}秒 / 解なしとは確定していません）`,
+          foundSolutions,
+          elapsedSec,
+        };
+      }
+
+      if (timedOut && foundSolutions.length === 0) {
+        return {
+          status: "timeout",
+          reason: `制限時間（${timeoutMs / 1000}秒）内に探索が終わらず中断しました（解なしとは確定していません）`,
+          elapsedSec,
+        };
+      }
 
       if (foundSolutions.length === 0) {
-        return { ok: false, reason: `解が見つかりませんでした（${elapsed} ms）` };
+        return {
+          status: "no_solution",
+          reason: `全探索が完了しましたが、解が見つかりませんでした（${elapsedSec}秒）`,
+          elapsedSec,
+        };
       }
 
       const firstSol = foundSolutions[0];
@@ -799,11 +873,56 @@
       }
 
       return {
-        ok: true,
+        status: timedOut ? "solved_partial_timeout" : "solved",
         result,
         solutionCount: foundSolutions.length,
-        elapsed,
+        elapsedSec,
+        timedOut,
       };
+    }
+
+    async function runSolve(maxSolutions) {
+      if (isSolving) return;
+      isSolving = true;
+      cancelRequested = false;
+      updateControlsState();
+      setStatus("探索を開始しました...");
+
+      const cellMap = collectCellsInfo();
+      const timeoutMs = Number($timeoutSelect.value);
+      const res = await solveMultiSudoku(cellMap, givenValues, maxSolutions, timeoutMs);
+
+      isSolving = false;
+      cancelRequested = false;
+      updateControlsState();
+
+      if (res.status === "invalid" || res.status === "no_solution") {
+        setStatus(res.reason, true);
+        return;
+      }
+
+      if (res.status === "timeout") {
+        setStatus(res.reason, true);
+        return;
+      }
+
+      if (res.status === "cancelled") {
+        setStatus(res.reason, true);
+        return;
+      }
+
+      solvedValues = res.result;
+      render(focusedCell);
+
+      if (maxSolutions === 1) {
+        setStatus(`解を表示しました（${boards.length}連 / ${res.elapsedSec}秒）`);
+      } else if (res.solutionCount === 1 && !res.timedOut) {
+        setStatus(`一意解（解は1通りのみ）を確認しました（${boards.length}連 / ${res.elapsedSec}秒）`);
+      } else if (res.solutionCount > 1) {
+        setStatus(`注意：複数の解が存在します（2個以上を確認 / ${res.elapsedSec}秒）`, true);
+      } else {
+        setStatus(`1つ目の解を表示しましたが、時間切れのため一意性は未確定です（${res.elapsedSec}秒）`, true);
+      }
     }
 
     document.getElementById("apply-preset-btn").addEventListener("click", () => {
@@ -824,31 +943,12 @@
       render(focusedCell);
     });
 
-    document.getElementById("solve-btn").addEventListener("click", () => {
-      const cellMap = collectCellsInfo();
-      const res = solveMultiSudoku(cellMap, givenValues, 1);
-      if (res.ok) {
-        solvedValues = res.result;
-        render(focusedCell);
-        setStatus(`解を表示しました（${boards.length}連 / ${res.elapsed} ms）`);
-      } else {
-        setStatus(res.reason, true);
-      }
-    });
-
-    document.getElementById("check-unique-btn").addEventListener("click", () => {
-      const cellMap = collectCellsInfo();
-      const res = solveMultiSudoku(cellMap, givenValues, 2);
-      if (!res.ok) {
-        setStatus(res.reason, true);
-        return;
-      }
-      solvedValues = res.result;
-      render(focusedCell);
-      if (res.solutionCount === 1) {
-        setStatus(`一意解（解は1通りのみ）を確認しました（${boards.length}連 / ${res.elapsed} ms）`);
-      } else {
-        setStatus(`注意：複数の解が存在します（2個以上を確認 / ${res.elapsed} ms）`, true);
+    document.getElementById("solve-btn").addEventListener("click", () => runSolve(1));
+    document.getElementById("check-unique-btn").addEventListener("click", () => runSolve(2));
+    document.getElementById("cancel-solve-btn").addEventListener("click", () => {
+      if (isSolving) {
+        cancelRequested = true;
+        setStatus("中止要求を送信しました...");
       }
     });
 
